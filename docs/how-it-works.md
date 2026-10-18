@@ -81,9 +81,14 @@ administrator rights, Windows silently redirects the write to
 from then on Chessmaster reads that copy instead of the real file. So the setup:
 
 - runs with administrator rights and edits the real files;
-- also adds the picture to a VirtualStore copy of `faces.idx`/`faces.dat` if one exists, since that
-  copy would hide the real one;
+- also adds the picture to every VirtualStore copy of `faces.idx`/`faces.dat`, since such a copy
+  hides the real one;
 - deletes any VirtualStore copy of the `.CMP` file, for the same reason.
+
+It does this for **every user profile** on the PC (from
+`HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList`), not just its own. On a standard
+(non-administrator) Windows account, approving the setup's permission prompt runs it as the
+administrator account, whose `%LOCALAPPDATA%` is not the player's.
 
 ## 5. Uninstalling
 

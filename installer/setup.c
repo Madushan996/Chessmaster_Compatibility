@@ -303,13 +303,49 @@ static BOOL find_cmdir(BOOL may_browse) {
     }
 }
 
-// %LOCALAPPDATA%\VirtualStore\<Chessmaster folder without the drive>
-static BOOL virtualstore_dir(wchar_t *out, size_t n) {
-    if (!(iswalpha(g_cmdir[0]) && g_cmdir[1] == L':' && g_cmdir[2] == L'\\')) return FALSE;
-    PWSTR local = NULL;
-    if (SHGetKnownFolderPath(&FOLDERID_LocalAppData, 0, NULL, &local) != S_OK) return FALSE;
-    swprintf(out, n, L"%ls\\VirtualStore\\%ls", local, g_cmdir + 3);
-    CoTaskMemFree(local);
+// Calls fn() with each user's VirtualStore copy of the Chessmaster folder,
+// <profile>\AppData\Local\VirtualStore\<Chessmaster folder without the drive>.
+// Every profile, not just the current one: on a standard account the setup runs
+// as the administrator who approved it, while Chessmaster runs as the player.
+typedef BOOL (*ShadowFn)(const wchar_t *vs, const unsigned char *bmp, DWORD bmp_size);
+static BOOL faces_update(const wchar_t *dir, const unsigned char *bmp, DWORD bmp_size);
+
+static BOOL for_each_virtualstore(ShadowFn fn, const unsigned char *bmp, DWORD bmp_size) {
+    if (!(iswalpha(g_cmdir[0]) && g_cmdir[1] == L':' && g_cmdir[2] == L'\\')) return TRUE;
+    HKEY list;
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\ProfileList",
+                      0, KEY_READ, &list) != ERROR_SUCCESS)
+        return TRUE;
+    BOOL ok = TRUE;
+    wchar_t sid[256];
+    for (DWORD i = 0; ok; i++) {
+        DWORD n = 256;
+        if (RegEnumKeyExW(list, i, sid, &n, NULL, NULL, NULL, NULL) != ERROR_SUCCESS) break;
+        wchar_t raw[PATH_LEN], profile[PATH_LEN], vs[PATH_LEN * 2];
+        DWORD size = sizeof(raw) - sizeof(wchar_t);
+        if (RegGetValueW(list, sid, L"ProfileImagePath",
+                         RRF_RT_REG_SZ | RRF_RT_REG_EXPAND_SZ | RRF_NOEXPAND, NULL, raw, &size) !=
+            ERROR_SUCCESS)
+            continue;
+        if (!ExpandEnvironmentStringsW(raw, profile, PATH_LEN)) continue;
+        swprintf(vs, PATH_LEN * 2, L"%ls\\AppData\\Local\\VirtualStore\\%ls", profile, g_cmdir + 3);
+        if (is_dir(vs)) ok = fn(vs, bmp, bmp_size);
+    }
+    RegCloseKey(list);
+    return ok;
+}
+
+// Brings one VirtualStore copy in line: the portrait added (bmp) or removed
+// (NULL) in its picture archive, and no stale personality file shadowing ours.
+static BOOL update_shadow(const wchar_t *vs, const unsigned char *bmp, DWORD bmp_size) {
+    wchar_t path[PATH_LEN * 2 + 64];
+    swprintf(path, PATH_LEN * 2 + 64, L"%ls\\Data\\TData\\faces.idx", vs);
+    if (is_file(path)) {
+        swprintf(path, PATH_LEN * 2 + 64, L"%ls\\Data\\TData", vs);
+        if (!faces_update(path, bmp, bmp_size)) return FALSE;
+    }
+    swprintf(path, PATH_LEN * 2 + 64, L"%ls\\Data\\Personalities\\%ls", vs, CMP_NAME);
+    DeleteFileW(path);
     return TRUE;
 }
 
@@ -771,18 +807,9 @@ static BOOL install(void) {
     if (!write_file(path, portrait, portrait_size)) return FALSE;
     if (!write_ini() || !test_engine()) return FALSE;
 
-    // Portrait, in the real archive and in any VirtualStore copy that shadows it.
-    wchar_t tdata[PATH_LEN + 32], vs[PATH_LEN * 2], vs_tdata[PATH_LEN * 2 + 32];
-    wchar_t backup[PATH_LEN + 64], from[PATH_LEN * 2 + 64];
+    // Portrait, in the real archive.
+    wchar_t tdata[PATH_LEN + 32], backup[PATH_LEN + 64], from[PATH_LEN * 2 + 64];
     swprintf(tdata, PATH_LEN + 32, L"%ls\\Data\\TData", g_cmdir);
-    BOOL have_vs = virtualstore_dir(vs, PATH_LEN * 2);
-    swprintf(vs_tdata, PATH_LEN * 2 + 32, L"%ls\\Data\\TData", have_vs ? vs : L"");
-    BOOL vs_faces = FALSE;
-    if (have_vs) {
-        swprintf(from, PATH_LEN * 2 + 64, L"%ls\\faces.idx", vs_tdata);
-        vs_faces = is_file(from);
-    }
-
     swprintf(backup, PATH_LEN + 64, L"%ls\\backup", g_instdir);
     CreateDirectoryW(backup, NULL);
     const wchar_t *names[] = {L"faces.idx", L"faces.dat"};
@@ -792,41 +819,27 @@ static BOOL install(void) {
         if (!copy_if_missing(from, path)) return FALSE;
     }
     if (!faces_update(tdata, portrait, portrait_size)) return FALSE;
-    if (vs_faces && !faces_update(vs_tdata, portrait, portrait_size)) return FALSE;
 
     // Personality.
     unsigned char cmp[CMP_SIZE];
     if (!build_personality(cmp)) return FALSE;
     swprintf(path, PATH_LEN + 64, L"%ls\\Data\\Personalities\\%ls", g_cmdir, CMP_NAME);
     if (!write_file(path, cmp, CMP_SIZE)) return FALSE;
-    if (have_vs) {
-        swprintf(from, PATH_LEN * 2 + 64, L"%ls\\Data\\Personalities\\%ls", vs, CMP_NAME);
-        DeleteFileW(from);
-    }
+
+    // Every user's VirtualStore copy, which Chessmaster reads instead of the real files.
+    if (!for_each_virtualstore(update_shadow, portrait, portrait_size)) return FALSE;
     return register_uninstall(engine_size + polyglot_size);
 }
 
 static BOOL uninstall(BOOL have_cm) {
-    wchar_t path[PATH_LEN * 2 + 64], vs[PATH_LEN * 2];
-    BOOL have_vs = have_cm && virtualstore_dir(vs, PATH_LEN * 2);
+    wchar_t path[PATH_LEN * 2 + 64];
 
     if (!have_cm) goto files;  // Chessmaster is gone: only remove CeylonDemon's own files
     swprintf(path, PATH_LEN * 2 + 64, L"%ls\\Data\\TData", g_cmdir);
     if (!faces_update(path, NULL, 0)) return FALSE;
-    if (have_vs) {
-        swprintf(path, PATH_LEN * 2 + 64, L"%ls\\Data\\TData\\faces.idx", vs);
-        if (is_file(path)) {
-            swprintf(path, PATH_LEN * 2 + 64, L"%ls\\Data\\TData", vs);
-            if (!faces_update(path, NULL, 0)) return FALSE;
-        }
-    }
-
     swprintf(path, PATH_LEN * 2 + 64, L"%ls\\Data\\Personalities\\%ls", g_cmdir, CMP_NAME);
     if (is_file(path) && !DeleteFileW(path)) return fail_win(L"Could not delete:", path);
-    if (have_vs) {
-        swprintf(path, PATH_LEN * 2 + 64, L"%ls\\Data\\Personalities\\%ls", vs, CMP_NAME);
-        DeleteFileW(path);
-    }
+    if (!for_each_virtualstore(update_shadow, NULL, 0)) return FALSE;
 
 files:
     RegDeleteKeyW(UNINSTALL_ROOT, UNINSTALL_KEY);
