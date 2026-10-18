@@ -54,7 +54,9 @@ Pop-Location
 if ($rc -ne 0) { throw 'resource compile failed' }
 
 $out = if ($Test) { 'dist\CeylonDemon-Chessmaster-Setup-test.exe' } else { 'dist\CeylonDemon-Chessmaster-Setup.exe' }
-& gcc -O2 -Wall -municode -mwindows installer\setup.c build\setup_res.o -o $out -s -static `
+$cDefs = @()
+if ($Test) { $cDefs += '-DTEST_BUILD' }
+& gcc -O2 -Wall @cDefs -municode -mwindows installer\setup.c build\setup_res.o -o $out -s -static `
   -lshell32 -lole32 -luuid -ladvapi32
 if ($LASTEXITCODE -ne 0) { throw 'installer build failed' }
 $size = [math]::Round((Get-Item $out).Length / 1MB, 1)

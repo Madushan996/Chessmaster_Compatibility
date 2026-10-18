@@ -85,6 +85,16 @@ from then on Chessmaster reads that copy instead of the real file. So the setup:
   copy would hide the real one;
 - deletes any VirtualStore copy of the `.CMP` file, for the same reason.
 
+## 5. Uninstalling
+
+The setup copies itself to `C:\Chess\CeylonDemon\uninstall.exe` and registers it under
+`HKLM\Software\Microsoft\Windows\CurrentVersion\Uninstall\CeylonDemonChessmaster`, so it appears
+in Settings > Apps > Installed apps. Uninstalling removes the picture from the archive (and from a
+VirtualStore copy), deletes the `.CMP` file, the registry entry and the install folder. Because a
+running program cannot delete its own folder, `uninstall.exe` hands over to a copy in `%TEMP%`,
+which waits for it to exit and is deleted at the next restart. If Chessmaster itself was removed
+first, only CeylonDemon's own files and entry are removed.
+
 ## Adding another engine
 
 The same steps work for any UCI engine: a folder with the engine, `polyglot.exe` and a

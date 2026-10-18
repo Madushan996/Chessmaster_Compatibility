@@ -49,9 +49,19 @@ Good to know:
 
 ## Remove CeylonDemon
 
-Run `CeylonDemon-Chessmaster-Setup.exe` again. It will say CeylonDemon is already installed:
-click **No** to remove it. Chessmaster is put back exactly as it was. Clicking **Yes** instead
-installs it again, which also repairs a broken installation.
+Remove it like any other program:
+
+1. Open the **Start** menu and click **Settings** (the gear icon).
+2. Click **Apps**, then **Installed apps** (on Windows 10: **Apps & features**).
+3. Find **CeylonDemon for Chessmaster**, click the **⋯** button next to it (on Windows 10, click
+   the name), then click **Uninstall**.
+4. Click **Yes** when Windows asks for permission, then **OK** to confirm.
+
+Chessmaster is put back exactly as it was before CeylonDemon was added.
+
+You can also run `CeylonDemon-Chessmaster-Setup.exe` again: it will say CeylonDemon is already
+installed. Click **No** to remove it, or **Yes** to install it again, which also repairs a broken
+installation.
 
 ## Questions and problems
 
@@ -89,13 +99,15 @@ It has only been tested with **Chessmaster Grandmaster Edition** on Windows 11.
 ### What exactly does the setup change?
 
 - It creates the folder `C:\Chess\CeylonDemon` with CeylonDemon, PolyGlot (a small helper
-  program that lets Chessmaster talk to CeylonDemon), their settings, and a backup of
-  Chessmaster's picture files.
+  program that lets Chessmaster talk to CeylonDemon), their settings, the uninstaller, and a
+  backup of Chessmaster's picture files.
+- It adds **CeylonDemon for Chessmaster** to Windows' list of installed apps, so you can remove it
+  from Settings.
 - It adds CeylonDemon's picture to Chessmaster's picture files (`Data\TData\faces.idx` and
   `faces.dat`).
 - It adds the CeylonDemon player file (`Data\Personalities\CeylonDemon.CMP`).
 
-Removing CeylonDemon undoes all three. Nothing else on your computer is changed.
+Removing CeylonDemon undoes all of this. Nothing else on your computer is changed.
 
 ## For developers
 

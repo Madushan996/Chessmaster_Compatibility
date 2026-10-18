@@ -42,10 +42,24 @@
 #define CMP_SIZE       3104
 #define CM_REG_KEY     L"SOFTWARE\\Ubisoft\\Chessmaster Grandmaster Edition"
 #define CM_DEFAULT_DIR L"Ubisoft\\Chessmaster Grandmaster Edition"
+#define UNINSTALL_EXE  L"uninstall.exe"
+#define PUBLISHER      L"Madushan Dissanayake"
+#define REPO_URL       L"https://github.com/Madushan996/Chessmaster_Compatibility"
+
+// The "Installed apps" entry. Test builds (no administrator rights) use a
+// per-user entry with a different name.
+#ifdef TEST_BUILD
+#define UNINSTALL_ROOT HKEY_CURRENT_USER
+#define UNINSTALL_KEY  L"Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\CeylonDemonChessmasterTest"
+#else
+#define UNINSTALL_ROOT HKEY_LOCAL_MACHINE
+#define UNINSTALL_KEY  L"Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\CeylonDemonChessmaster"
+#endif
 
 #define PATH_LEN 1024
 
 static wchar_t g_cmdir[PATH_LEN];
+static BOOL g_cmdir_given;  // /cmdir= was passed (even empty): never search for another Chessmaster
 static wchar_t g_instdir[PATH_LEN];
 static wchar_t g_err[2048];
 static BOOL g_quiet;
@@ -236,12 +250,17 @@ static BOOL try_cmdir(const wchar_t *dir) {
     return TRUE;
 }
 
-// Finds Chessmaster from the registry, the default folder, or by asking.
-static BOOL find_cmdir(void) {
-    if (g_cmdir[0]) {
-        if (try_cmdir(g_cmdir)) return TRUE;
-        return fail(L"This is not a Chessmaster Grandmaster Edition folder:\n\n%ls", g_cmdir);
+// Finds Chessmaster from the registry, the default folder, or (if may_browse) by asking.
+static BOOL find_cmdir(BOOL may_browse) {
+    if (g_cmdir_given) {
+        if (g_cmdir[0] && try_cmdir(g_cmdir)) return TRUE;
+        fail(L"This is not a Chessmaster Grandmaster Edition folder:\n\n%ls", g_cmdir);
+        g_cmdir[0] = 0;
+        return FALSE;
     }
+#ifdef TEST_BUILD
+    return fail(L"Test build: pass /cmdir=<copy of Chessmaster>; it never uses the real one.");
+#endif
     HKEY key;
     if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, CM_REG_KEY, 0, KEY_READ | KEY_WOW64_32KEY, &key) ==
         ERROR_SUCCESS) {
@@ -260,7 +279,7 @@ static BOOL find_cmdir(void) {
         swprintf(dir, PATH_LEN * 2, L"%ls\\%ls", root, CM_DEFAULT_DIR);
         if (try_cmdir(dir)) return TRUE;
     }
-    if (g_quiet) return fail(L"Chessmaster Grandmaster Edition was not found.");
+    if (g_quiet || !may_browse) return fail(L"Chessmaster Grandmaster Edition was not found.");
     ask(MB_OK | MB_ICONINFORMATION,
         L"Chessmaster Grandmaster Edition was not found in the usual place.\n\n"
         L"In the next window, please choose the folder where Chessmaster is installed "
@@ -668,6 +687,50 @@ static BOOL test_engine(void) {
                 g_instdir);
 }
 
+// ---- Windows "Installed apps" entry -------------------------------------------
+
+static void set_sz(HKEY key, const wchar_t *name, const wchar_t *value) {
+    RegSetValueExW(key, name, 0, REG_SZ, (const BYTE *)value,
+                   (DWORD)((wcslen(value) + 1) * sizeof(wchar_t)));
+}
+
+static void set_dword(HKEY key, const wchar_t *name, DWORD value) {
+    RegSetValueExW(key, name, 0, REG_DWORD, (const BYTE *)&value, sizeof(value));
+}
+
+// Keeps a copy of this setup as uninstall.exe and lists CeylonDemon in
+// Settings > Apps > Installed apps, so it can be removed like any program.
+static BOOL register_uninstall(DWORD installed_bytes) {
+    wchar_t self[PATH_LEN], exe[PATH_LEN + 32], cmd[PATH_LEN * 4], icon[PATH_LEN + 40];
+    swprintf(exe, PATH_LEN + 32, L"%ls\\%ls", g_instdir, UNINSTALL_EXE);
+    if (!GetModuleFileNameW(NULL, self, PATH_LEN)) return fail(L"Could not find the setup file.");
+    if (_wcsicmp(self, exe) && !CopyFileW(self, exe, FALSE))
+        return fail_win(L"Could not copy the uninstaller to:", exe);
+
+    HKEY key;
+    LONG r = RegCreateKeyExW(UNINSTALL_ROOT, UNINSTALL_KEY, 0, NULL, 0, KEY_WRITE, NULL, &key, NULL);
+    if (r != ERROR_SUCCESS) {
+        SetLastError((DWORD)r);
+        return fail_win(L"Could not add CeylonDemon to the list of installed apps:", UNINSTALL_KEY);
+    }
+    swprintf(cmd, PATH_LEN * 4, L"\"%ls\" /uninstall \"/installdir=%ls\" \"/cmdir=%ls\"", exe, g_instdir,
+             g_cmdir);
+    swprintf(icon, PATH_LEN + 40, L"%ls,0", exe);
+    set_sz(key, L"DisplayName", APP_TITLE);
+    set_sz(key, L"DisplayVersion", L"3.3");
+    set_sz(key, L"Publisher", PUBLISHER);
+    set_sz(key, L"DisplayIcon", icon);
+    set_sz(key, L"UninstallString", cmd);
+    set_sz(key, L"InstallLocation", g_instdir);
+    set_sz(key, L"URLInfoAbout", REPO_URL);
+    set_sz(key, L"HelpLink", REPO_URL);
+    set_dword(key, L"NoModify", 1);
+    set_dword(key, L"NoRepair", 1);
+    set_dword(key, L"EstimatedSize", installed_bytes / 1024 * 2);  // KB, files + uninstall.exe
+    RegCloseKey(key);
+    return TRUE;
+}
+
 // ---- install / uninstall ------------------------------------------------------
 
 static BOOL install(void) {
@@ -740,13 +803,14 @@ static BOOL install(void) {
         swprintf(from, PATH_LEN * 2 + 64, L"%ls\\Data\\Personalities\\%ls", vs, CMP_NAME);
         DeleteFileW(from);
     }
-    return TRUE;
+    return register_uninstall(engine_size + polyglot_size);
 }
 
-static BOOL uninstall(void) {
+static BOOL uninstall(BOOL have_cm) {
     wchar_t path[PATH_LEN * 2 + 64], vs[PATH_LEN * 2];
-    BOOL have_vs = virtualstore_dir(vs, PATH_LEN * 2);
+    BOOL have_vs = have_cm && virtualstore_dir(vs, PATH_LEN * 2);
 
+    if (!have_cm) goto files;  // Chessmaster is gone: only remove CeylonDemon's own files
     swprintf(path, PATH_LEN * 2 + 64, L"%ls\\Data\\TData", g_cmdir);
     if (!faces_update(path, NULL, 0)) return FALSE;
     if (have_vs) {
@@ -764,8 +828,30 @@ static BOOL uninstall(void) {
         DeleteFileW(path);
     }
 
+files:
+    RegDeleteKeyW(UNINSTALL_ROOT, UNINSTALL_KEY);
     if (is_dir(g_instdir)) delete_tree(g_instdir);
     if (!_wcsicmp(g_instdir, DEFAULT_DIR)) RemoveDirectoryW(L"C:\\Chess");  // only if empty
+    return TRUE;
+}
+
+// Uninstalling from inside the install folder would leave the running
+// uninstall.exe (and so the folder) behind: run a copy from %TEMP% instead,
+// which waits for this process to exit.
+static BOOL relaunch_from_temp(void) {
+    wchar_t self[PATH_LEN], tmp[PATH_LEN], copy[PATH_LEN + 64], cmd[PATH_LEN * 4];
+    if (!GetModuleFileNameW(NULL, self, PATH_LEN) || !GetTempPathW(PATH_LEN, tmp))
+        return fail(L"Could not start the uninstaller.");
+    swprintf(copy, PATH_LEN + 64, L"%lsCeylonDemon-uninstall.exe", tmp);
+    if (!CopyFileW(self, copy, FALSE)) return fail_win(L"Could not start the uninstaller:", copy);
+    swprintf(cmd, PATH_LEN * 4, L"\"%ls\" /uninstall /confirmed%ls /waitpid=%lu \"/installdir=%ls\" \"/cmdir=%ls\"",
+             copy, g_quiet ? L" /quiet" : L"", GetCurrentProcessId(), g_instdir, g_cmdir);
+    STARTUPINFOW si = {sizeof(si)};
+    PROCESS_INFORMATION pi;
+    if (!CreateProcessW(copy, cmd, NULL, NULL, FALSE, 0, NULL, tmp, &si, &pi))
+        return fail_win(L"Could not start the uninstaller:", copy);
+    CloseHandle(pi.hProcess);
+    CloseHandle(pi.hThread);
     return TRUE;
 }
 
@@ -785,6 +871,8 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE prev, PWSTR cmdline, int show) {
     (void)cmdline;
     (void)show;
     enum { ASK, INSTALL, UNINSTALL } mode = ASK;
+    BOOL confirmed = FALSE;
+    DWORD wait_pid = 0;
     wcscpy(g_instdir, DEFAULT_DIR);
 
     int argc;
@@ -793,7 +881,12 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE prev, PWSTR cmdline, int show) {
         if (!_wcsicmp(argv[i], L"/quiet")) g_quiet = TRUE;
         else if (!_wcsicmp(argv[i], L"/install")) mode = INSTALL;
         else if (!_wcsicmp(argv[i], L"/uninstall")) mode = UNINSTALL;
-        else if (!_wcsnicmp(argv[i], L"/cmdir=", 7)) wcsncpy(g_cmdir, argv[i] + 7, PATH_LEN - 1);
+        else if (!_wcsicmp(argv[i], L"/confirmed")) confirmed = TRUE;
+        else if (!_wcsnicmp(argv[i], L"/waitpid=", 9)) wait_pid = wcstoul(argv[i] + 9, NULL, 10);
+        else if (!_wcsnicmp(argv[i], L"/cmdir=", 7)) {
+            wcsncpy(g_cmdir, argv[i] + 7, PATH_LEN - 1);
+            g_cmdir_given = TRUE;
+        }
         else if (!_wcsnicmp(argv[i], L"/installdir=", 12)) {
             wcsncpy(g_instdir, argv[i] + 12, PATH_LEN - 1);
             strip_slashes(g_instdir);
@@ -802,7 +895,17 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE prev, PWSTR cmdline, int show) {
     if (argv) LocalFree(argv);
     CoInitializeEx(NULL, COINIT_APARTMENTTHREADED);
 
-    if (!find_cmdir()) {
+    if (wait_pid) {  // started by relaunch_from_temp(): let the uninstall.exe we came from exit
+        HANDLE parent = OpenProcess(SYNCHRONIZE, FALSE, wait_pid);
+        if (parent) {
+            WaitForSingleObject(parent, 15000);
+            CloseHandle(parent);
+        }
+    }
+
+    // Removing CeylonDemon must work even if Chessmaster itself is already gone.
+    BOOL have_cm = find_cmdir(mode != UNINSTALL);
+    if (!have_cm && mode != UNINSTALL) {
         if (g_err[0]) ask(MB_OK | MB_ICONERROR, L"%ls", g_err);
         return 1;
     }
@@ -812,7 +915,12 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE prev, PWSTR cmdline, int show) {
             return 1;
     }
 
-    if (mode == ASK && installed()) {
+    if (mode == UNINSTALL && !confirmed) {
+        if (ask(MB_OKCANCEL | MB_ICONQUESTION,
+                L"Remove CeylonDemon from Chessmaster?\n\n"
+                L"Chessmaster will be put back as it was before CeylonDemon was added.") != IDOK)
+            return 0;
+    } else if (mode == ASK && installed()) {
         int r = ask(MB_YESNOCANCEL | MB_ICONQUESTION,
                     L"CeylonDemon is already installed in Chessmaster.\n\n"
                     L"Yes:  install it again (repair)\n"
@@ -831,9 +939,18 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE prev, PWSTR cmdline, int show) {
         mode = INSTALL;
     }
 
+    wchar_t self[PATH_LEN] = L"";
+    GetModuleFileNameW(NULL, self, PATH_LEN);
+    if (mode == UNINSTALL && path_under(self, g_instdir)) {
+        if (relaunch_from_temp()) return 0;
+        ask(MB_OK | MB_ICONERROR, L"Sorry, something went wrong.\n\n%ls", g_err);
+        return 1;
+    }
+
     HCURSOR old = SetCursor(LoadCursor(NULL, IDC_WAIT));
-    BOOL ok = mode == INSTALL ? install() : uninstall();
+    BOOL ok = mode == INSTALL ? install() : uninstall(have_cm);
     SetCursor(old);
+    if (wait_pid) MoveFileExW(self, NULL, MOVEFILE_DELAY_UNTIL_REBOOT);  // the %TEMP% copy
     if (!ok) {
         ask(MB_OK | MB_ICONERROR, L"Sorry, something went wrong.\n\n%ls", g_err);
         return 1;
@@ -843,7 +960,8 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE prev, PWSTR cmdline, int show) {
             L"CeylonDemon is ready!\n\n"
             L"Open Chessmaster and choose CeylonDemon as a player. You will find it in the "
             L"list of opponents, in the \"Xboard Engines\" group.\n\n"
-            L"To remove it later, run this setup again and choose No (remove).");
+            L"To remove it later: Windows Settings > Apps > Installed apps > "
+            L"CeylonDemon for Chessmaster > Uninstall.");
     else
         ask(MB_OK | MB_ICONINFORMATION, L"CeylonDemon has been removed from Chessmaster.");
     return 0;
