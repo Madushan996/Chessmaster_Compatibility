@@ -1,0 +1,4 @@
+build/
+dist/
+installer/payload/
+__pycache__/

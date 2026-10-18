@@ -1,0 +1,45 @@
+#include <windows.h>
+#include "resource.h"
+
+IDI_APP ICON "../assets/CeylonDemon.ico"
+
+// Release builds ask for administrator rights (Chessmaster lives in Program Files).
+// Test builds (-DASINVOKER) run without them, against copied folders.
+#ifdef ASINVOKER
+1 RT_MANIFEST "setup-test.manifest"
+#else
+1 RT_MANIFEST "setup.manifest"
+#endif
+
+IDR_POLYGLOT    RCDATA "payload/polyglot.exe"
+IDR_ENGINE_BMI2 RCDATA "payload/CeylonDemon-3.3-x86-64-bmi2.exe"
+#ifdef WITH_AVX2
+IDR_ENGINE_AVX2 RCDATA "payload/CeylonDemon-3.3-x86-64-avx2.exe"
+#endif
+IDR_PORTRAIT    RCDATA "../assets/CeylonDemon.bmp"
+
+VS_VERSION_INFO VERSIONINFO
+FILEVERSION     1,0,0,0
+PRODUCTVERSION  1,0,0,0
+FILEOS          VOS_NT_WINDOWS32
+FILETYPE        VFT_APP
+BEGIN
+  BLOCK "StringFileInfo"
+  BEGIN
+    BLOCK "040904B0"
+    BEGIN
+      VALUE "CompanyName",      "Madushan Dissanayake"
+      VALUE "FileDescription",  "CeylonDemon for Chessmaster Setup"
+      VALUE "FileVersion",      "1.0.0"
+      VALUE "InternalName",     "CeylonDemon-Chessmaster-Setup"
+      VALUE "LegalCopyright",   "GPL-3.0-or-later. Includes CeylonDemon (GPL-3.0) and PolyGlot (GPL-2.0-or-later)."
+      VALUE "OriginalFilename", "CeylonDemon-Chessmaster-Setup.exe"
+      VALUE "ProductName",      "CeylonDemon for Chessmaster"
+      VALUE "ProductVersion",   "1.0.0"
+    END
+  END
+  BLOCK "VarFileInfo"
+  BEGIN
+    VALUE "Translation", 0x409, 1200
+  END
+END

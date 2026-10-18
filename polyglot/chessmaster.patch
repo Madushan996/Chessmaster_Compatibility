@@ -1,0 +1,72 @@
+diff --git a/main.c b/main.c
+index e06d59c..656b4d4 100644
+--- a/main.c
++++ b/main.c
+@@ -8,6 +8,9 @@
+ #include <stdlib.h>
+ #include <string.h>
+ #include <time.h>
++#ifdef _WIN32
++#include <windows.h>
++#endif
+ 
+ #include "attack.h"
+ #include "board.h"
+@@ -357,6 +360,25 @@ int main(int argc, char * argv[]) {
+             // This has already been set above or in "option_init_pg()"
+     }
+ 
++#ifdef _WIN32
++        // GUIs such as Chessmaster may start us from their own folder:
++        // fall back to polyglot.ini next to polyglot.exe.
++
++    if(my_string_equal(option_get_string(Option,"SettingsFile"),"polyglot.ini")){
++        FILE *f=fopen("polyglot.ini","r");
++        if(f){
++            fclose(f);
++        }else{
++            char path[MAX_PATH];
++            char *slash;
++            DWORD n=GetModuleFileNameA(NULL,path,sizeof(path));
++            if(n>0 && n<sizeof(path) && (slash=strrchr(path,'\\'))){
++                strcpy(slash+1,"polyglot.ini");
++                option_set(Option,"SettingsFile",path);
++            }
++        }
++    }
++#endif
+ 
+ 
+         // if we use a config file: load it!
+@@ -558,14 +580,14 @@ int main(int argc, char * argv[]) {
+         return EXIT_SUCCESS;
+     }
+     
+-        // Anything that hasn't been parsed yet is a syntax error
+-        // It seems that XBoard sometimes passes empty strings as arguments
+-        // to PolyGlot. We ignore these. 
++        // Anything that hasn't been parsed yet is ignored.
++        // XBoard sometimes passes empty strings, and Chessmaster passes
++        // arguments meant for its own engine (e.g. "-t1").
+ 
+     argc=1;
+     while((arg=argv[argc++])){
+         if(!my_string_equal(arg,"")){
+-            my_fatal("main(): Incorrect use of option: \"%s\"\n",argv[argc-1]);
++            my_log("POLYGLOT Ignoring unknown argument \"%s\"\n",arg);
+         }
+     }
+ 
+diff --git a/pipex_win32.c b/pipex_win32.c
+index 41431b3..1466743 100644
+--- a/pipex_win32.c
++++ b/pipex_win32.c
+@@ -130,7 +130,7 @@ void pipex_open(pipex_t *pipex,
+                        dwMode & ~(ENABLE_MOUSE_INPUT | ENABLE_WINDOW_INPUT));
+         FlushConsoleInputBuffer(pipex->hInput);
+     } 
+-    fdInput=_open_osfhandle((long) pipex->hInput,_O_RDONLY);
++    fdInput=_open_osfhandle((intptr_t) pipex->hInput,_O_RDONLY);
+     if(fdInput==-1){
+         my_fatal("pipex_open(): %s",strerror(errno));
+     }
