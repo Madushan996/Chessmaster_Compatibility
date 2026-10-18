@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="assets\Screenshot.png" alt="CeylonDemoninCM" width="220">
+<img src="assets\Screenshot.png" alt="CeylonDemoninCM" width="1020">
 
 # Play CeylonDemon in Chessmaster
 
